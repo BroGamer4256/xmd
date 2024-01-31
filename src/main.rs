@@ -1,0 +1,165 @@
+#![feature(iter_array_chunks)]
+use binary_parser::*;
+use clap::Parser;
+use libflate::gzip;
+use std::{
+	fs::File,
+	io::{Cursor, Read, SeekFrom, Write},
+	path::{Path, PathBuf},
+};
+
+#[derive(Parser)]
+struct Args {
+	path: String,
+	#[arg(short, long)]
+	compress: bool,
+}
+
+fn main() {
+	let args = Args::parse();
+	let path = PathBuf::from(args.path);
+	if !path.exists() {
+		panic!("Path must exist");
+	} else if path.is_dir() {
+		let xmd = Xmd::from_files(&path).unwrap();
+		xmd.write_file(path.with_extension("xmd"), args.compress)
+			.unwrap();
+	} else if path.is_file() {
+		let xmd = Xmd::from_file(&path).unwrap();
+		let folder = path.with_extension("");
+		std::fs::create_dir(&folder).unwrap();
+		for (i, data) in xmd.files.iter().enumerate() {
+			let mut file = File::create(folder.join(i.to_string())).unwrap();
+			file.write(data).unwrap();
+		}
+	} else {
+		panic!("What have you done");
+	}
+}
+
+#[derive(Default, Debug)]
+pub struct Xmd {
+	pub files: Vec<Vec<u8>>,
+}
+
+impl Xmd {
+	pub fn from_files<P: Into<PathBuf>>(path: P) -> Option<Self> {
+		let path: PathBuf = path.into();
+		if !path.is_dir() {
+			return None;
+		}
+		let mut xmd = Self::default();
+		for file in std::fs::read_dir(path).ok()? {
+			let file = file.ok()?;
+			if file.path().is_file() {
+				let data = std::fs::read(file.path()).ok()?;
+				xmd.files.push(data);
+			}
+		}
+
+		Some(xmd)
+	}
+
+	pub fn from_file<P: AsRef<Path>>(path: P) -> Option<Self> {
+		let mut reader = BinaryParser::from_file(path).ok()?;
+		let id = reader.read_buf(3).ok()?;
+		if id == [0x1F, 0x8B, 0x08] {
+			let mut cursor = Cursor::new(reader.to_buf().ok()?);
+			let mut decoder = gzip::Decoder::new(&mut cursor).ok()?;
+			let mut data = Vec::new();
+			decoder.read_to_end(&mut data).ok()?;
+			reader = BinaryParser::from_buf(data);
+		}
+		reader.seek(SeekFrom::Start(0)).ok()?;
+		Self::from_parser(&mut reader)
+	}
+
+	pub fn from_parser(reader: &mut BinaryParser) -> Option<Self> {
+		let id = reader.read_null_string().ok()?;
+		if id != "XMD" {
+			return None;
+		}
+		_ = reader.read_u32().ok()?;
+		_ = reader.read_u32().ok()?;
+		let count = reader.read_u32().ok()? as usize;
+
+		let offsets = reader.read_buf(count * 4).ok()?;
+		let offsets = offsets
+			.iter()
+			.array_chunks::<4>()
+			.map(|[a, b, c, d]| u32::from_le_bytes([*a, *b, *c, *d]))
+			.collect::<Vec<_>>();
+
+		let pos = reader.position();
+		let offset = if pos & 0xF != 0 {
+			(pos & !0xF) + 0x10
+		} else {
+			pos
+		};
+		reader.seek(SeekFrom::Start(offset)).ok()?;
+
+		let lengths = reader.read_buf(count * 4).ok()?;
+		let lengths = lengths
+			.iter()
+			.array_chunks::<4>()
+			.map(|[a, b, c, d]| u32::from_le_bytes([*a, *b, *c, *d]))
+			.collect::<Vec<_>>();
+
+		let mut i = 0;
+		let mut xmd = Self::default();
+		while i < count {
+			reader.seek(SeekFrom::Start(offsets[i] as u64)).ok()?;
+			let data = reader.read_buf(lengths[i] as usize).ok()?;
+			xmd.files.push(data);
+			i += 1;
+		}
+
+		Some(xmd)
+	}
+
+	pub fn write_file<P: AsRef<Path>>(&self, path: P, compress: bool) -> Option<()> {
+		let mut file = File::create(path).ok()?;
+		let parser = self.write_parser(compress)?;
+		file.write(&parser.to_buf_const().unwrap()).ok()?;
+		Some(())
+	}
+
+	pub fn write_parser(&self, compress: bool) -> Option<BinaryParser> {
+		let mut writer = BinaryParser::new();
+		writer.write_string("XMD\0001\0").ok()?;
+		writer.write_u32(3).ok()?;
+		writer.write_u32(self.files.len() as u32).ok()?;
+		for file in &self.files {
+			let file = file.clone();
+			writer
+				.write_pointer(move |writer| {
+					writer.write_buf(&file)?;
+					while writer.position() & 0xF != 0 {
+						writer.write_u8(0)?;
+					}
+					Ok(())
+				})
+				.ok()?;
+		}
+		while writer.position() & 0xF != 0 {
+			writer.write_u32(0).ok()?;
+		}
+		for file in &self.files {
+			writer.write_u32(file.len() as u32).ok()?;
+		}
+		while writer.position() & 0xF != 0 {
+			writer.write_u32(0).ok()?;
+		}
+		writer.finish_writes().ok()?;
+		let writer = if compress {
+			let buf = writer.to_buf_const().unwrap();
+			let mut encoder = gzip::Encoder::new(vec![]).ok()?;
+			encoder.write(buf).ok()?;
+			let data = encoder.finish().into_result().ok()?;
+			BinaryParser::from_buf(data)
+		} else {
+			writer
+		};
+		Some(writer)
+	}
+}
