@@ -26,10 +26,32 @@ fn main() {
 			.unwrap();
 	} else if path.is_file() {
 		let xmd = Xmd::from_file(&path).unwrap();
-		let folder = path.with_extension("");
+		let folder = format!(
+			"{}_{}",
+			path.with_extension("").to_str().unwrap(),
+			path.extension().unwrap().to_str().unwrap()
+		);
 		std::fs::create_dir(&folder).unwrap();
 		for (i, data) in xmd.files.iter().enumerate() {
-			let mut file = File::create(folder.join(i.to_string())).unwrap();
+			let mut buf = [0; 4];
+			data.take(4).read(&mut buf).unwrap();
+			let name = if buf == [b'N', b'D', b'W', b'D'] {
+				let mut reader = BinaryParser::from_buf(data.clone());
+				reader.seek(SeekFrom::Start(0x10)).unwrap();
+				let poly_start = reader.read_u32().unwrap() + 0x30;
+				let poly_size = reader.read_u32().unwrap();
+				let vert_size = reader.read_u32().unwrap();
+				let vert_add_size = reader.read_u32().unwrap();
+				let name_pos = poly_start + poly_size + vert_size + vert_add_size;
+				reader.seek(SeekFrom::Start(name_pos as u64)).unwrap();
+
+				format!("{}.nud", reader.read_null_string().unwrap())
+			} else if buf == [b'N', b'T', b'W', b'D'] {
+				format!("{}.nut", i.to_string())
+			} else {
+				i.to_string()
+			};
+			let mut file = File::create(format!("{}/{}", folder, name)).unwrap();
 			file.write(data).unwrap();
 		}
 	} else {
