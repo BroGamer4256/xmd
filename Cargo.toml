@@ -9,3 +9,10 @@ edition = "2021"
 binary_parser = { git = "https://github.com/BroGamer4256/binary_parser" }
 clap = { version = "4.4.18", features = ["derive"] }
 libflate = "2.0"
+
+[profile.release]
+lto = true
+panic = 'abort'
+strip = true
+codegen-units = 1
+incremental = true
