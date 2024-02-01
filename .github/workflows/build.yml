@@ -9,17 +9,9 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: nightly
-          target: x86_64-pc-windows-gnu
-          override: true
-          components: rust-src
-      - uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --target x86_64-pc-windows-gnu --release -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort
-      - uses: actions/upload-artifact@v2
+      - uses: actions/checkout@v3
+      - name: Build
+        run: cargo build --target x86_64-pc-windows-gnu --release
+      - uses: actions/upload-artifact@v3
         with:
           path: target/x86_64-pc-windows-gnu/release/xmd.exe
