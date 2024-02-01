@@ -3,6 +3,7 @@ use binary_parser::*;
 use clap::Parser;
 use libflate::gzip;
 use std::{
+	collections::BTreeMap,
 	fs::File,
 	io::{Cursor, Read, SeekFrom, Write},
 	path::{Path, PathBuf},
@@ -32,24 +33,15 @@ fn main() {
 			path.extension().unwrap().to_str().unwrap()
 		);
 		std::fs::create_dir(&folder).unwrap();
-		for (i, data) in xmd.files.iter().enumerate() {
+		for (id, data) in &xmd.files {
 			let mut buf = [0; 4];
 			data.take(4).read(&mut buf).unwrap();
 			let name = if buf == [b'N', b'D', b'W', b'D'] {
-				let mut reader = BinaryParser::from_buf(data.clone());
-				reader.seek(SeekFrom::Start(0x10)).unwrap();
-				let poly_start = reader.read_u32().unwrap() + 0x30;
-				let poly_size = reader.read_u32().unwrap();
-				let vert_size = reader.read_u32().unwrap();
-				let vert_add_size = reader.read_u32().unwrap();
-				let name_pos = poly_start + poly_size + vert_size + vert_add_size;
-				reader.seek(SeekFrom::Start(name_pos as u64)).unwrap();
-
-				format!("{}.nud", reader.read_null_string().unwrap())
+				format!("{}.nud", id)
 			} else if buf == [b'N', b'T', b'W', b'D'] {
-				format!("{}.nut", i.to_string())
+				format!("{}.nut", id)
 			} else {
-				i.to_string()
+				format!("{}", id)
 			};
 			let mut file = File::create(format!("{}/{}", folder, name)).unwrap();
 			file.write(data).unwrap();
@@ -61,7 +53,7 @@ fn main() {
 
 #[derive(Default, Debug)]
 pub struct Xmd {
-	pub files: Vec<Vec<u8>>,
+	pub files: BTreeMap<u32, Vec<u8>>,
 }
 
 impl Xmd {
@@ -74,8 +66,18 @@ impl Xmd {
 		for file in std::fs::read_dir(path).ok()? {
 			let file = file.ok()?;
 			if file.path().is_file() {
-				let data = std::fs::read(file.path()).ok()?;
-				xmd.files.push(data);
+				if let Ok(id) = file
+					.path()
+					.with_extension("")
+					.file_name()
+					.unwrap()
+					.to_str()
+					.unwrap()
+					.parse::<u32>()
+				{
+					let data = std::fs::read(file.path()).ok()?;
+					xmd.files.insert(id, data);
+				}
 			}
 		}
 
@@ -112,16 +114,19 @@ impl Xmd {
 			.map(|[a, b, c, d]| u32::from_le_bytes([*a, *b, *c, *d]))
 			.collect::<Vec<_>>();
 
-		let pos = reader.position();
-		let offset = if pos & 0xF != 0 {
-			(pos & !0xF) + 0x10
-		} else {
-			pos
-		};
-		reader.seek(SeekFrom::Start(offset)).ok()?;
+		reader.align_seek(0x10).ok()?;
 
 		let lengths = reader.read_buf(count * 4).ok()?;
 		let lengths = lengths
+			.iter()
+			.array_chunks::<4>()
+			.map(|[a, b, c, d]| u32::from_le_bytes([*a, *b, *c, *d]))
+			.collect::<Vec<_>>();
+
+		reader.align_seek(0x10).ok()?;
+
+		let ids = reader.read_buf(count * 4).ok()?;
+		let ids = ids
 			.iter()
 			.array_chunks::<4>()
 			.map(|[a, b, c, d]| u32::from_le_bytes([*a, *b, *c, *d]))
@@ -132,7 +137,7 @@ impl Xmd {
 		while i < count {
 			reader.seek(SeekFrom::Start(offsets[i] as u64)).ok()?;
 			let data = reader.read_buf(lengths[i] as usize).ok()?;
-			xmd.files.push(data);
+			xmd.files.insert(ids[i], data);
 			i += 1;
 		}
 
@@ -151,27 +156,25 @@ impl Xmd {
 		writer.write_string("XMD\0001\0").ok()?;
 		writer.write_u32(3).ok()?;
 		writer.write_u32(self.files.len() as u32).ok()?;
-		for file in &self.files {
+		for (_, file) in &self.files {
 			let file = file.clone();
 			writer
 				.write_pointer(move |writer| {
 					writer.write_buf(&file)?;
-					while writer.position() & 0xF != 0 {
-						writer.write_u8(0)?;
-					}
-					Ok(())
+					writer.align_write(0x10)
 				})
 				.ok()?;
 		}
-		while writer.position() & 0xF != 0 {
-			writer.write_u32(0).ok()?;
-		}
-		for file in &self.files {
+		writer.align_write(0x10).ok()?;
+		for (_, file) in &self.files {
 			writer.write_u32(file.len() as u32).ok()?;
 		}
-		while writer.position() & 0xF != 0 {
-			writer.write_u32(0).ok()?;
+		writer.align_write(0x10).ok()?;
+		for (id, _) in &self.files {
+			writer.write_u32(*id).ok()?;
 		}
+		writer.align_write(0x10).ok()?;
+
 		writer.finish_writes().ok()?;
 		let writer = if compress {
 			let buf = writer.to_buf_const().unwrap();

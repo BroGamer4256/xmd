@@ -71,7 +71,7 @@ dependencies = [
 [[package]]
 name = "binary_parser"
 version = "0.1.0"
-source = "git+https://github.com/BroGamer4256/binary_parser#0beee1bf65316c50d1024ff08a6820cda9f53330"
+source = "git+https://github.com/BroGamer4256/binary_parser#372b67628c6c2c9f7126430a493736518b778048"
 dependencies = [
  "paste",
  "thiserror",
