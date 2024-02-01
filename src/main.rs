@@ -11,8 +11,6 @@ use std::{
 #[derive(Parser)]
 struct Args {
 	path: String,
-	#[arg(short, long)]
-	compress: bool,
 }
 
 fn main() {
@@ -22,8 +20,7 @@ fn main() {
 		panic!("Path must exist");
 	} else if path.is_dir() {
 		let xmd = Xmd::from_files(&path).unwrap();
-		xmd.write_file(path.with_extension("xmd"), args.compress)
-			.unwrap();
+		xmd.write_file(path.with_extension("xmd"), true).unwrap();
 	} else if path.is_file() {
 		let xmd = Xmd::from_file(&path).unwrap();
 		let folder = format!(
