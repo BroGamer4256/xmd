@@ -1,4 +1,3 @@
-#![feature(iter_array_chunks)]
 use binary_parser::*;
 use clap::Parser;
 use libflate::gzip;
@@ -107,30 +106,11 @@ impl Xmd {
 		_ = reader.read_u32().ok()?;
 		let count = reader.read_u32().ok()? as usize;
 
-		let offsets = reader.read_buf(count * 4).ok()?;
-		let offsets = offsets
-			.iter()
-			.array_chunks::<4>()
-			.map(|[a, b, c, d]| u32::from_le_bytes([*a, *b, *c, *d]))
-			.collect::<Vec<_>>();
-
+		let offsets = reader.read_u32_array(count as u64).ok()?;
 		reader.align_seek(0x10).ok()?;
-
-		let lengths = reader.read_buf(count * 4).ok()?;
-		let lengths = lengths
-			.iter()
-			.array_chunks::<4>()
-			.map(|[a, b, c, d]| u32::from_le_bytes([*a, *b, *c, *d]))
-			.collect::<Vec<_>>();
-
+		let lengths = reader.read_u32_array(count as u64).ok()?;
 		reader.align_seek(0x10).ok()?;
-
-		let ids = reader.read_buf(count * 4).ok()?;
-		let ids = ids
-			.iter()
-			.array_chunks::<4>()
-			.map(|[a, b, c, d]| u32::from_le_bytes([*a, *b, *c, *d]))
-			.collect::<Vec<_>>();
+		let ids = reader.read_u32_array(count as u64).ok()?;
 
 		let mut i = 0;
 		let mut xmd = Self::default();
@@ -165,14 +145,17 @@ impl Xmd {
 				})
 				.ok()?;
 		}
+
 		writer.align_write(0x10).ok()?;
-		for (_, file) in &self.files {
-			writer.write_u32(file.len() as u32).ok()?;
-		}
+		let lengths = self
+			.files
+			.iter()
+			.map(|(_, file)| file.len() as u32)
+			.collect::<Vec<_>>();
+		writer.write_u32_array(&lengths).ok()?;
 		writer.align_write(0x10).ok()?;
-		for (id, _) in &self.files {
-			writer.write_u32(*id).ok()?;
-		}
+		let ids = self.files.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+		writer.write_u32_array(&ids).ok()?;
 		writer.align_write(0x10).ok()?;
 
 		writer.finish_writes().ok()?;
