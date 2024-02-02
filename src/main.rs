@@ -41,8 +41,13 @@ fn main() {
 				let vert_add_size = reader.read_u32().unwrap();
 				let name_pos = poly_start + poly_size + vert_size + vert_add_size;
 				reader.seek(SeekFrom::Start(name_pos as u64)).unwrap();
+				let name = reader.read_null_string().unwrap();
+				let name = name
+					.chars()
+					.filter(|c| c.is_alphabetic() || c == &'_')
+					.collect::<String>();
 
-				format!("{}_{}.nud", reader.read_null_string().unwrap(), id)
+				format!("{}_{}.nud", name, id)
 			} else if buf == [b'N', b'T', b'W', b'D'] {
 				format!("{}.nut", id)
 			} else {
