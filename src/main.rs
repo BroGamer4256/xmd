@@ -33,7 +33,16 @@ fn main() {
 			let mut buf = [0; 4];
 			data.take(4).read(&mut buf).unwrap();
 			let name = if buf == [b'N', b'D', b'W', b'D'] {
-				format!("{}.nud", id)
+				let mut reader = BinaryParser::from_buf(data.clone());
+				reader.seek(SeekFrom::Start(0x10)).unwrap();
+				let poly_start = reader.read_u32().unwrap() + 0x30;
+				let poly_size = reader.read_u32().unwrap();
+				let vert_size = reader.read_u32().unwrap();
+				let vert_add_size = reader.read_u32().unwrap();
+				let name_pos = poly_start + poly_size + vert_size + vert_add_size;
+				reader.seek(SeekFrom::Start(name_pos as u64)).unwrap();
+
+				format!("{}_{}.nud", reader.read_null_string().unwrap(), id)
 			} else if buf == [b'N', b'T', b'W', b'D'] {
 				format!("{}.nut", id)
 			} else {
@@ -69,6 +78,9 @@ impl Xmd {
 					.unwrap()
 					.to_str()
 					.unwrap()
+					.chars()
+					.filter(|c| c.is_numeric())
+					.collect::<String>()
 					.parse::<u32>()
 				{
 					let data = std::fs::read(file.path()).ok()?;
